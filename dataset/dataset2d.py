@@ -86,6 +86,15 @@ class Dataset2D(Dataset):
         for key in self.input_meta["obs"].keys():
             if key.startswith("head_cam"):
                 normalizer[key] = get_image_range_normalizer()
+            elif key.startswith("gaussian"):
+                normalizer[key] = get_identity_normalizer_from_stat(
+                    stat = {
+                        'min': np.array([-1], dtype=np.float32),
+                        'max': np.array([1], dtype=np.float32),
+                        'mean': np.array([0], dtype=np.float32),
+                        'std': np.array([1], dtype=np.float32)
+                    }
+                )
         return normalizer
     
     def __getitem__(self, idx: int) -> Dict[str, Any]:
@@ -97,7 +106,6 @@ class Dataset2D(Dataset):
             if key.startswith("head_cam"):
                 obs = self.data[key][buffer_start_idx:buffer_end_idx]
                 obs = np.array(obs).astype(np.float32) / 255.0
-                obs = np.moveaxis(obs, -1, -3)
             elif key.startswith("state"):
                 obs = self.data[key.replace("state", "action")][buffer_start_idx:buffer_end_idx]
                 obs = np.array(obs).astype(np.float32)

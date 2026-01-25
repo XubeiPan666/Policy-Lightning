@@ -13,6 +13,12 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu***
 
 # Install project dependencies
 pip install -r requirements.txt
+
+
+# Optional: compile the cuda kernels for RoPE (for GauDP)
+cd model/noposplat/encoder/backbone/croco/curope
+python setup.py build_ext --inplace
+cd ../../../../../../
 ```
 
 ## 📁 Data Preparation
@@ -30,6 +36,12 @@ We provide small-scale demo datasets for quick testing and validation. You can d
 
 ## 🏋️ Training
 
+**[GauDP](https://ziyeeee.github.io/gaudp.io/):**
+
+```bash
+python workspace.py --config-name=GauDP task=2a_lift_barrier_gau
+```
+
 **2D Diffusion Policy:**
 
 ```bash
@@ -41,6 +53,7 @@ python workspace.py --config-name=dp2 task=2a_lift_barrier
 ```bash
 python workspace.py --config-name=dp3 task=2a_lift_barrier_3d
 ```
+
 
 **Custom Policy:**
 
@@ -57,5 +70,5 @@ To integrate your own policy architecture:
 4. Add a task configuration under `./config/task/`.
 
 ```bash
-python workspace --config-name=[custom_polic] task=[custom_task]
+python workspace.py --config-name=[custom_polic] task=[custom_task]
 ```

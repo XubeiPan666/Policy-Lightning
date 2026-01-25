@@ -1,13 +1,21 @@
-import os
-from typing import Union
+from pathlib import Path
+from omegaconf import OmegaConf
 from tqdm import tqdm
 import h5py
 import numpy as np
+import torch
 from torch.utils.data import Dataset
 import argparse
 
 from mani_skill.utils.io_utils import load_json
 from mani_skill.utils import common
+
+if __name__ == "__main__":
+    import sys
+
+    ROOT_DIR = str(Path(__file__).parent.parent.parent)
+    sys.path.append(ROOT_DIR)
+from model.noposplat.encoder import get_encoder
 
 # loads h5 data into memory for faster access
 def load_h5_data(data):
@@ -93,9 +101,25 @@ class ManiSkillTrajectoryDataset(Dataset):
         self.data.close()
 
 
-def main(dataset_path: str, output_path: str, load_num: int, agent_num: int) -> None:
+def main(dataset_path: str, config_path: str, output_path: str, load_num: int, agent_num: int) -> None:
     dataset = ManiSkillTrajectoryDataset(dataset_file=dataset_path, load_count=load_num)
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    cfg = OmegaConf.load(config_path)
+    device = 'cuda:0'
+
+    gaussian_encoder = get_encoder(cfg.encoder)
+    if cfg.encoder.pretrained_weights:
+        weight_path = cfg.encoder.pretrained_weights
+        ckpt_weights = torch.load(weight_path, map_location="cpu", weights_only=True)
+        ckpt_weights = ckpt_weights["state_dict"]
+        ckpt_weights = {k[8:]: v for k, v in ckpt_weights.items() if k.startswith("encoder.")}
+        missing_keys, unexpected_keys = gaussian_encoder.load_state_dict(ckpt_weights, strict=False)
+        print("successfully loaded encoder weights")
+    else:
+        raise ValueError(f"Invalid checkpoint format: {weight_path}")
+    
+    gaussian_encoder.to(device)
+    gaussian_encoder.eval()
+
     comp_kwaegs = {'compression': 'gzip', 'compression_opts': 4}
     episode_ends = []
     end = 0
@@ -104,6 +128,7 @@ def main(dataset_path: str, output_path: str, load_num: int, agent_num: int) -> 
             obs = data["obs"]
             action = data["action"]
             if data is not None:
+                views = []
                 for agent_id in range(agent_num):
                     camera_name = "head_camera_agent" + str(agent_id)
                     if (len(action[f'panda-{agent_id}']) != len(obs[camera_name]["rgb"])):
@@ -119,6 +144,7 @@ def main(dataset_path: str, output_path: str, load_num: int, agent_num: int) -> 
                     head_cam = obs[camera_name]["rgb"][:min_len]
                     head_cam = np.array(head_cam).astype(np.uint8)
                     head_cam = np.moveaxis(head_cam, -1, -3)
+                    views.append(head_cam)
 
                     agent_action = action[f'panda-{agent_id}'][:min_len]
                     agent_action = np.array(agent_action).astype(np.float32)
@@ -129,7 +155,7 @@ def main(dataset_path: str, output_path: str, load_num: int, agent_num: int) -> 
                             shape=head_cam.shape,
                             maxshape=(None, *head_cam.shape[1:]),
                             dtype="uint8",
-                            **comp_kwaegs
+                            # **comp_kwaegs
                         )
                         f.create_dataset(
                             f"action_{agent_id}",
@@ -137,25 +163,53 @@ def main(dataset_path: str, output_path: str, load_num: int, agent_num: int) -> 
                             shape=agent_action.shape,
                             maxshape=(None, *agent_action.shape[1:]),
                             dtype="float32",
-                            **comp_kwaegs
+                            # **comp_kwaegs
                         )
                     else:
                         f[f"head_cam_{agent_id}"].resize((f[f"head_cam_{agent_id}"].shape[0] + head_cam.shape[0]), axis=0)
                         f[f"head_cam_{agent_id}"][-head_cam.shape[0]:] = head_cam
                         f[f"action_{agent_id}"].resize((f[f"action_{agent_id}"].shape[0] + agent_action.shape[0]), axis=0)
                         f[f"action_{agent_id}"][-agent_action.shape[0]:] = agent_action
+
+                # get Gaussians
+                views = np.stack(views, axis=1)
+                views = views / 255.0
+                views = (views * 2) - 1
+                gaussians = []
+                for j in range(0, views.shape[0], cfg.batch_size):
+                    with torch.no_grad():
+                        batch_image = torch.tensor(views[j:j+cfg.batch_size]).float().to(device)
+                        gaussian = gaussian_encoder({'image':batch_image})
+                        gaussian = gaussian.to('cpu').numpy()
+                        gaussians.append(gaussian)
+                gaussians = np.concatenate(gaussians, axis=0)
+                for agent_id in range(agent_num):
+                    gaussian = gaussians[:, agent_id]
+                    if i==0:
+                        f.create_dataset(
+                            f"gaussian_{agent_id}",
+                            data=gaussian,
+                            shape=gaussian.shape,
+                            maxshape=(None, *gaussian.shape[1:]),
+                            dtype="float32",
+                            # **comp_kwaegs
+                        )
+                    else:
+                        f[f"gaussian_{agent_id}"].resize((f[f"gaussian_{agent_id}"].shape[0] + gaussian.shape[0]), axis=0)
+                        f[f"gaussian_{agent_id}"][-gaussian.shape[0]:] = gaussian
         f.create_dataset(
             "episode_ends",
             data=np.array(episode_ends),
-            **comp_kwaegs
+            # **comp_kwaegs
         )
     
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--dataset_path", type=str, required=True, help="Path to the dataset")
+    parser.add_argument("--config_path", type=str, required=True, help="Path to the config")
     parser.add_argument("--output_path", type=str, required=True, help="Path to save the output")
     parser.add_argument("--agent_num", type=int, default=4, help="Number of agents (default: 4)")
-    parser.add_argument("--load_num", type=int, default=-1, help="Number of trajectories to load")
+    parser.add_argument("--load_num", type=int, required=True, help="Number of trajectories to load")
     args = parser.parse_args()
 
-    main(args.dataset_path, args.output_path, args.load_num, args.agent_num)
+    main(args.dataset_path, args.config_path, args.output_path, args.load_num, args.agent_num)

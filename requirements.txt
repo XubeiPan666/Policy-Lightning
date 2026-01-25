@@ -19,3 +19,4 @@ tqdm
 wandb
 hydra-core
 prefetch_generator
+jaxtyping
