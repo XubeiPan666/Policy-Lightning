@@ -1,7 +1,11 @@
+from typing import Union, Optional  # 从这里导入 Union 和 Optional
 from diffusers.optimization import (
-    Union, SchedulerType, Optional,
-    Optimizer, TYPE_TO_SCHEDULER_FUNCTION
+    SchedulerType, Optimizer, TYPE_TO_SCHEDULER_FUNCTION
 )
+# from diffusers.optimization import (
+#     Union, SchedulerType, Optional,
+#     Optimizer, TYPE_TO_SCHEDULER_FUNCTION
+# )
 
 def get_scheduler(
     name: Union[str, SchedulerType],
